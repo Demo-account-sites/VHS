@@ -1,5 +1,5 @@
 streamlit
-google-cloud-bigquery
-pandas-gbq
+gspread
+google-auth
 seatsio
 pandas
