@@ -1,21 +1,22 @@
 import streamlit as st
 import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
 import seatsio
+import io
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="Sheet to Seats.io", layout="wide")
+st.set_page_config(page_title="CSV Event Manager", layout="wide")
 
-# --- AUTHENTICATION ---
+# --- 1. LOGIN LOGIC ---
 def check_password():
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
+
     if not st.session_state.authenticated:
         st.title("🔐 Login")
         email = st.text_input("Email")
         password = st.text_input("Password", type="password")
         if st.button("Login"):
+            # These must be set in your Streamlit Cloud Secrets
             if email == st.secrets["user_email"] and password == st.secrets["user_password"]:
                 st.session_state.authenticated = True
                 st.rerun()
@@ -24,27 +25,7 @@ def check_password():
         return False
     return True
 
-# --- DATA FETCHING (GOOGLE SHEETS) ---
-def fetch_from_sheet():
-    # Authenticate with Google
-    scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
-    gc = gspread.authorize(creds)
-    
-    # Open the sheet
-    sh = gc.open("VHS availabilities per category") # Your Sheet Name
-    worksheet = sh.worksheet("Extract1")
-    
-    # Get all records as a list of dictionaries
-    data = worksheet.get_all_records()
-    df = pd.DataFrame(data)
-    
-    # Clean up: Streamlit likes unique keys. 
-    # Ensure 'event_key' (Column F) exists and is handled.
-    st.session_state.df = df
-    st.session_state.availability = {str(key): "Pending..." for key in df['event_key'] if key}
-
-# --- SEATSIO API CALL ---
+# --- 2. SEATSIO API FUNCTION ---
 def update_seatsio(event_key):
     client = seatsio.Client(seatsio.Region.EU(), secret_key=st.secrets["seatsio_key"])
     try:
@@ -55,57 +36,75 @@ def update_seatsio(event_key):
             held = sum(getattr(s, 'num_held', 0) or 0 for s in seat_list)
             cap = sum(getattr(s, 'capacity', 0) or 0 for s in seat_list)
             status_list.append(f"**{category}**: {booked+held}/{cap}")
+        
+        # Save results to session state so they persist
         st.session_state.availability[str(event_key)] = " | ".join(status_list)
     except Exception as e:
         st.session_state.availability[str(event_key)] = f"Error: {e}"
 
-# --- MAIN APP UI ---
+# --- 3. MAIN APP UI ---
 if check_password():
-    st.title("📊 Event Availability Manager")
+    st.title("📂 CSV Availability Manager")
 
+    # Initialize Session States
     if "df" not in st.session_state:
         st.session_state.df = None
     if "availability" not in st.session_state:
         st.session_state.availability = {}
 
-    # Top Action Buttons
-    col_a, col_b = st.columns([1, 4])
-    if col_a.button("🔄 Sync Sheet"):
-        with st.status("Reading Google Sheet...", expanded=False):
-            fetch_from_sheet()
-        st.rerun()
-    
-    if st.session_state.df is not None:
-        if col_b.button("⚡ Refresh All Seats.io"):
-            with st.status("Updating all rows...", expanded=False):
-                for key in st.session_state.df['event_key']:
-                    if key: update_seatsio(key)
+    # File Uploader
+    uploaded_file = st.file_uploader("Upload your event CSV file", type=["csv"])
+
+    if uploaded_file is not None:
+        # Load data only if it's the first time or a new file
+        if st.session_state.df is None or st.button("🔄 Reload CSV Data"):
+            df = pd.read_csv(uploaded_file)
+            st.session_state.df = df
+            # Reset availability map
+            st.session_state.availability = {str(key): "Click to load" for key in df['event_key'] if pd.notnull(key)}
             st.rerun()
 
+    if st.session_state.df is not None:
         st.divider()
+        
+        # Action Buttons
+        if st.button("⚡ Run API for All Rows"):
+            with st.status("Fetching all data from Seats.io...", expanded=False) as status:
+                for key in st.session_state.df['event_key']:
+                    if pd.notnull(key):
+                        update_seatsio(key)
+                status.update(label="All rows updated!", state="complete")
+            st.rerun()
 
-        # Display Custom Table
-        # Define column widths to match your sheet's structure
+        # Custom Table View
+        # Adjust these column names to match your CSV headers exactly
         cols = st.columns([2, 2, 2, 4, 1])
-        headers = ["Product", "Show Name", "Start Date", "Availability", "Action"]
+        headers = ["Product", "Show Name", "Start Date", "Live Availability", "Action"]
         for col, h in zip(cols, headers):
             col.write(f"**{h}**")
 
-        for _, row in st.session_state.df.iterrows():
+        for index, row in st.session_state.df.iterrows():
             key = str(row['event_key'])
-            if not key: continue
+            if not key or key == "nan":
+                continue
 
             c1, c2, c3, c4, c5 = st.columns([2, 2, 2, 4, 1])
+            
+            # Using .get() or checking names to prevent errors if CSV headers vary
             c1.write(row.get('product_name', 'N/A'))
             c2.write(row.get('show_name', 'N/A'))
             c3.write(row.get('show_start_date', 'N/A'))
             
-            # Show the availability from session state
-            c4.info(st.session_state.availability.get(key, "Pending"))
+            # Show the availability status
+            avail_text = st.session_state.availability.get(key, "Pending...")
+            if "Error" in avail_text:
+                c4.error(avail_text)
+            elif "/" in avail_text:
+                c4.success(avail_text)
+            else:
+                c4.info(avail_text)
             
-            # Individual row button
-            if c5.button("🔄", key=f"btn_{key}"):
+            # Individual Row Button
+            if c5.button("🔄", key=f"btn_{index}_{key}"):
                 update_seatsio(key)
                 st.rerun()
-    else:
-        st.info("Click 'Sync Sheet' to load the data.")
