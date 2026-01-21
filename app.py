@@ -26,7 +26,7 @@ def check_password():
     return True
 
 # --- 2. DATA FETCHING (BIGQUERY) ---
-@st.cache_data(ttl=3600) # Check for fresh data every hour
+@st.cache_data(ttl=43200) # Check for fresh data every 12 hours
 def fetch_bigquery_data():
     # Construct a BigQuery client object.
     client = bigquery.Client.from_service_account_info(st.secrets["gcp_service_account"])
@@ -80,11 +80,6 @@ if check_password():
     # Auto-fetch data
     with st.spinner("Fetching data from BigQuery..."):
         df = fetch_bigquery_data()
-        
-    # Manual Refresh Button
-    if st.sidebar.button("🔄 Force Refresh BigQuery"):
-        st.cache_data.clear()
-        st.rerun()
 
     if not df.empty:
         # Initialize availability map if not already present for these keys
