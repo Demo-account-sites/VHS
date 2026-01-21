@@ -1,5 +1,4 @@
 streamlit
 seatsio
 pandas
-google.cloud
-datetime
+google-cloud-bigquery
