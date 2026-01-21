@@ -59,7 +59,7 @@ def update_seatsio(event_key):
     try:
         result = client.events.reports.by_category_label(event_key)
         status_list = []
-        for category, seat_list in result.items():
+        for category, seat_list in result.items.items():
             booked = sum(getattr(s, 'num_booked', 0) or 0 for s in seat_list)
             held = sum(getattr(s, 'num_held', 0) or 0 for s in seat_list)
             cap = sum(getattr(s, 'capacity', 0) or 0 for s in seat_list)
