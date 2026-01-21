@@ -2,3 +2,5 @@ streamlit
 seatsio
 pandas
 google-cloud-bigquery
+db-dtypes
+pyarrow
